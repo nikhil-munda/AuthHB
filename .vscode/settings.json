@@ -1,0 +1,13 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports": "explicit",
+    "source.sortMembers": "explicit"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "/^npx expo config --type public --json \\| node -e 'let s=\"\";process\\.stdin\\.on\\(\"data\",d=>s\\+=d\\)\\.on\\(\"end\",\\(\\)=>\\{const c=JSON\\.parse\\(s\\); console\\.log\\(JSON\\.stringify\\(\\{scheme:c\\.scheme, package:c\\.android\\?\\.package, intentFilters:c\\.android\\?\\.intentFilters\\}, null, 2\\)\\);\\}\\)'$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
+}

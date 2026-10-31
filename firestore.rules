@@ -1,0 +1,149 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // This security rules file assumes the following data structures:
+    //
+    // Collection: users
+    // Document ID: {userId} (Must match request.auth.uid)
+    // Fields:
+    //   - uid: string (required, 1-128 chars, immutable, must match userId and request.auth.uid)
+    //   - name: string (optional, 0-100 chars) - user display or full name
+    //   - email: string (required, 5-150 chars, valid email format, official @hbplus.fit domain, must match request.auth.token.email)
+    //   - createdAt: timestamp (optional on create, immutable on update)
+    //
+    // All other collections:
+    //   - Denied by default (read and write)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Enforce official domain: authenticated user's email must end with '@hbplus.fit'
+    function isDomainUser() {
+      return isAuthenticated() &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email is string &&
+        request.auth.token.email.matches('.*@hbplus[.]fit$');
+    }
+
+    // Check if authenticated user is the owner of the document
+    function isOwner(userId) {
+      return isDomainUser() && request.auth.uid == userId;
+    }
+
+    // Validate standard email format
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    // Validate official domain email format (@hbplus.fit)
+    function isHbPlusEmail(email) {
+      return email is string && email.matches('.*@hbplus[.]fit$');
+    }
+
+    // Validate required fields exist in request resource data
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate only allowed fields are present in request resource data
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate immutable fields remain unchanged during update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate that a timestamp is recent (within the last 5 minutes)
+    function isRecent(time) {
+      return time is timestamp &&
+        time <= request.time &&
+        time > request.time - duration.value(5, 'm');
+    }
+
+    // ===============================================================
+    // Domain Validator Functions (Validator Function Pattern)
+    // ===============================================================
+
+    // Validate user profile schema, types, and constraints on create and update
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'name', 'email', 'createdAt']) &&
+        hasRequiredFields(['uid', 'email']) &&
+        data.uid is string &&
+        data.uid.size() >= 1 &&
+        data.uid.size() <= 128 &&
+        data.email is string &&
+        data.email.size() >= 5 &&
+        data.email.size() <= 150 &&
+        isValidEmail(data.email) &&
+        isHbPlusEmail(data.email) &&
+        (!('name' in data) || (data.name is string && data.name.size() <= 100)) &&
+        (!('createdAt' in data) || (data.createdAt is timestamp));
+    }
+
+    // ===============================================================
+    // Security Rules
+    // ===============================================================
+
+    // Default deny all access across database
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profile documents
+    match /users/{userId} {
+      // 1. Read:
+      //    - Users can only get their own profile document
+      //    - Collection listing is denied to prevent user enumeration
+      allow get: if isOwner(userId);
+      allow list: if false;
+
+      // 2. Create:
+      //    - Authenticated user must have official @hbplus.fit domain
+      //    - User can only create their own document (userId == request.auth.uid)
+      //    - Document data uid must match request.auth.uid
+      //    - Document data email must match request.auth.token.email
+      //    - Optional createdAt must be a valid recent timestamp
+      //    - Schema strictly limited to ['uid', 'name', 'email', 'createdAt'] (no role field)
+      allow create: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.email == request.auth.token.email &&
+        (!('createdAt' in request.resource.data) || isRecent(request.resource.data.createdAt));
+
+      // 3. Update:
+      //    - Authenticated user must have official @hbplus.fit domain
+      //    - User can only update their own document
+      //    - Document data must adhere to strict schema
+      //    - uid and createdAt are strictly immutable
+      //    - uid must match existing document
+      //    - email remains unchanged and matches request.auth.token.email
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        areImmutableFieldsUnchanged(['uid', 'createdAt']) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.email == request.auth.token.email;
+
+      // 4. Delete:
+      //    - Unauthorized deletion is strictly denied
+      allow delete: if false;
+    }
+  }
+}
